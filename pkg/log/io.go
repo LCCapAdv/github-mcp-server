@@ -14,6 +14,8 @@ type IOLogger struct {
 	logger *log.Logger
 }
 
+const maxLogBytes = 2048
+
 // NewIOLogger creates a new IOLogger instance
 func NewIOLogger(r io.Reader, w io.Writer, logger *log.Logger) *IOLogger {
 	return &IOLogger{
@@ -30,7 +32,13 @@ func (l *IOLogger) Read(p []byte) (n int, err error) {
 	}
 	n, err = l.reader.Read(p)
 	if n > 0 {
-		l.logger.Infof("[stdin]: received %d bytes: %s", n, string(p[:n]))
+		toLog := p[:n]
+		if len(toLog) > maxLogBytes {
+			toLog = toLog[:maxLogBytes]
+			l.logger.Infof("[stdin]: received %d bytes (truncated to %d): %s", n, maxLogBytes, string(toLog))
+		} else {
+			l.logger.Infof("[stdin]: received %d bytes: %s", n, string(toLog))
+		}
 	}
 	return n, err
 }
@@ -40,6 +48,12 @@ func (l *IOLogger) Write(p []byte) (n int, err error) {
 	if l.writer == nil {
 		return 0, io.ErrClosedPipe
 	}
-	l.logger.Infof("[stdout]: sending %d bytes: %s", len(p), string(p))
+	toLog := p
+	if len(toLog) > maxLogBytes {
+		toLog = toLog[:maxLogBytes]
+		l.logger.Infof("[stdout]: sending %d bytes (truncated to %d): %s", len(p), maxLogBytes, string(toLog))
+	} else {
+		l.logger.Infof("[stdout]: sending %d bytes: %s", len(p), string(toLog))
+	}
 	return l.writer.Write(p)
 }
