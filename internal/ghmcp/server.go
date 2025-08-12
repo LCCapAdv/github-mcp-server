@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/github/github-mcp-server/pkg/errors"
 	"github.com/github/github-mcp-server/pkg/github"
@@ -55,21 +57,39 @@ func NewMCPServer(cfg MCPServerConfig) (*server.MCPServer, error) {
 		return nil, fmt.Errorf("failed to parse API host: %w", err)
 	}
 
-	// Construct our REST client
-	restClient := gogithub.NewClient(nil).WithAuthToken(cfg.Token)
+	// Construct tuned HTTP transport
+	defaultDialer := &net.Dialer{
+		Timeout:   5 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+	optimizedTransport := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           defaultDialer.DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+
+	// Construct our REST client with timeouts
+	restHTTPClient := &http.Client{
+		Transport: optimizedTransport,
+		Timeout:   30 * time.Second,
+	}
+	restClient := gogithub.NewClient(restHTTPClient).WithAuthToken(cfg.Token)
 	restClient.UserAgent = fmt.Sprintf("github-mcp-server/%s", cfg.Version)
 	restClient.BaseURL = apiHost.baseRESTURL
 	restClient.UploadURL = apiHost.uploadURL
 
-	// Construct our GraphQL client
-	// We're using NewEnterpriseClient here unconditionally as opposed to NewClient because we already
-	// did the necessary API host parsing so that github.com will return the correct URL anyway.
+	// Construct our GraphQL client with timeouts
 	gqlHTTPClient := &http.Client{
 		Transport: &bearerAuthTransport{
-			transport: http.DefaultTransport,
+			transport: optimizedTransport,
 			token:     cfg.Token,
 		},
-	} // We're going to wrap the Transport later in beforeInit
+		Timeout: 30 * time.Second,
+	}
 	gqlClient := githubv4.NewEnterpriseClient(apiHost.graphqlURL.String(), gqlHTTPClient)
 
 	// When a client send an initialize request, update the user agent to include the client info.
